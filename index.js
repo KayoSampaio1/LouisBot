@@ -100,16 +100,10 @@ async function start() {
 }
 
 async function handleMessage(sock, msg) {
-  if (!msg.message) return;
+  if (!msg.message || msg.key.fromMe) return;
   const jid = msg.key.remoteJid;
   const isGroup = jid.endsWith('@g.us');
-  const isFromMe = msg.key.fromMe;
-  // Quando a mensagem é enviada pelo próprio número do bot (o dono testando os
-  // comandos no próprio WhatsApp), o Baileys não preenche "participant" — então
-  // o remetente somos nós mesmos.
-  const sender = isFromMe
-    ? `${sock.user.id.split(':')[0]}@s.whatsapp.net`
-    : msg.key.participant || msg.key.remoteJid;
+  const sender = msg.key.participant || msg.key.remoteJid;
   const text = getText(msg).trim();
 
   let groupMetadata = null;
@@ -121,29 +115,22 @@ async function handleMessage(sock, msg) {
     }
   }
 
-  // Mensagens enviadas pelo próprio bot (fromMe) só disparam comando explícito
-  // ("/..."). Isso evita que o bot reaja às próprias respostas automáticas
-  // (antilink, ttp implícito, referência bíblica implícita) e entre em loop.
-  if (isFromMe) {
-    if (!text.startsWith(config.prefix)) return;
-  } else {
-    // --- antilink ---
-    if (isGroup && text && LINK_REGEX.test(text)) {
-      const cfg = store.getGroupConfig(jid);
-      const senderIsAdmin = isParticipantAdmin(groupMetadata, sender);
-      if (cfg.antilink && !senderIsAdmin) {
-        try {
-          await sock.sendMessage(jid, { delete: msg.key });
-        } catch (e) {
-          /* bot pode não ser admin */
-        }
-        await sock.sendMessage(
-          jid,
-          { text: `🚫 Links não são permitidos aqui, @${sender.split('@')[0]}.`, mentions: [sender] },
-          { quoted: msg }
-        );
-        return;
+  // --- antilink ---
+  if (isGroup && text && LINK_REGEX.test(text)) {
+    const cfg = store.getGroupConfig(jid);
+    const senderIsAdmin = isParticipantAdmin(groupMetadata, sender);
+    if (cfg.antilink && !senderIsAdmin) {
+      try {
+        await sock.sendMessage(jid, { delete: msg.key });
+      } catch (e) {
+        /* bot pode não ser admin */
       }
+      await sock.sendMessage(
+        jid,
+        { text: `🚫 Links não são permitidos aqui, @${sender.split('@')[0]}.`, mentions: [sender] },
+        { quoted: msg }
+      );
+      return;
     }
   }
 
@@ -251,7 +238,7 @@ async function handleMessage(sock, msg) {
   }
 
   // --- referência bíblica implícita (ex: "Salmos 23:1") — checada primeiro por ser mais específica ---
-  if (!isFromMe && text && config.bibliaApiToken) {
+  if (text && config.bibliaApiToken) {
     const m = text.match(BIBLE_REF_REGEX);
     if (m) {
       try {
@@ -270,7 +257,7 @@ async function handleMessage(sock, msg) {
   }
 
   // --- ttp implícito: qualquer texto no privado vira figurinha de texto ---
-  if (!isFromMe && !isGroup && text && text.length <= 30 && !LINK_REGEX.test(text)) {
+  if (!isGroup && text && text.length <= 30 && !LINK_REGEX.test(text)) {
     try {
       const { textToStickerStatic } = require('./src/lib/mediaUtils');
       const buffer = await textToStickerStatic(text);
